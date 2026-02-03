@@ -6,10 +6,19 @@ const path = require('path');
  * @param {Object} websites - Array of website objects with {subdomain, port}
  */
 function updateProxyMap(websites) {
+    // Path should be relative to the script location, ensuring it's always found
     const mapFilePath = path.join(__dirname, '../nginx-proxy/proxy_map.conf');
+    const nginxProxyDir = path.dirname(mapFilePath);
+
+    if (!fs.existsSync(nginxProxyDir)) {
+        try {
+            fs.mkdirSync(nginxProxyDir, { recursive: true });
+        } catch (e) {
+            console.error('[ProxyUpdater] Failed to create nginx-proxy directory:', e.message);
+        }
+    }
 
     let content = `# Auto-generated proxy mapping
-# This file is managed by the generator script - DO NOT EDIT MANUALLY
 # Last updated: ${new Date().toISOString()}
 
 map $subdomain $target_port {
@@ -24,14 +33,14 @@ map $subdomain $target_port {
     content += '}\n';
 
     fs.writeFileSync(mapFilePath, content);
-    console.log('[ProxyUpdater] Nginx proxy map updated');
+    console.log('[ProxyUpdater] Nginx proxy map updated at:', mapFilePath);
 }
 
 /**
  * Reload Nginx configuration
- * Returns command to run (for dry-run compatibility)
  */
 function getNginxReloadCommand() {
+    // Sudo is required on Fedora for systemctl reload
     return 'sudo systemctl reload nginx';
 }
 

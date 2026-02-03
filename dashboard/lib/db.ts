@@ -19,7 +19,18 @@ export async function query(text: string, params?: any[]) {
         // Log as info, not warning, to avoid alarming the user during dev
         console.log('Running in Offline Mode (Mock Data)');
 
-        const mockFilePath = path.join(process.cwd(), '../data/mock_db.json');
+        // In production on the server, we use the absolute path to ensure consistency
+        const mockFilePath = process.env.GENERATOR_MODE === 'production'
+            ? '/var/www/auto-gen/data/mock_db.json'
+            : path.join(process.cwd(), '../data/mock_db.json');
+
+        // Ensure directory exists if in production mode (for first run)
+        if (process.env.GENERATOR_MODE === 'production') {
+            const dataDir = path.dirname(mockFilePath);
+            if (!fs.existsSync(dataDir)) {
+                fs.mkdirSync(dataDir, { recursive: true });
+            }
+        }
 
         // Ensure file exists
         if (!fs.existsSync(mockFilePath)) {

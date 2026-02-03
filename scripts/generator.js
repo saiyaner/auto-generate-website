@@ -6,22 +6,18 @@ const util = require('util');
 const execPromise = util.promisify(exec);
 const { updateProxyMap, getNginxReloadCommand } = require('./nginx-updater');
 
-// Database Config
-const client = new Client({
-    connectionString: process.env.DATABASE_URL || 'postgres://postgres:password123@localhost:5432/homelab_auto_gen'
-});
-
 // Configuration
-const IS_DRY_RUN = process.env.DRY_RUN === 'true' || process.platform === 'win32'; // Default to dry-run on Windows
+const IS_DRY_RUN = process.env.DRY_RUN === 'true' || process.platform === 'win32';
 const BASE_CONTAINER_DIR = process.env.CONTAINER_DIR || path.join(__dirname, '..', 'containers');
+const DATABASE_URL = process.env.DATABASE_URL || 'postgres://postgres:password123@localhost:5432/homelab_auto_gen';
 
 // Usage: node scripts/generator.js <action> <payload>
 const action = process.argv[2];
 const payloadStr = process.argv[3];
 const payload = payloadStr ? JSON.parse(payloadStr) : {};
 
-console.log(`[RealGenerator] Starting action: ${action}`);
-if (IS_DRY_RUN) console.log('[RealGenerator] Mode: DRY RUN (No commands will be executed)');
+const client = new Client({ connectionString: DATABASE_URL });
+let dbConnected = false;
 
 async function runCommand(command, cwd = process.cwd()) {
     console.log(`[CMD] ${command}`);
@@ -37,10 +33,21 @@ async function runCommand(command, cwd = process.cwd()) {
 }
 
 async function main() {
+    console.log(`[RealGenerator] Starting action: ${action}`);
+    if (IS_DRY_RUN) console.log('[RealGenerator] Mode: DRY RUN');
+
     try {
-        await client.connect();
+        // Attempt database connection with a 2-second timeout
+        const connectPromise = client.connect();
+        const timeoutPromise = new Promise((_, reject) =>
+            setTimeout(() => reject(new Error('Database connection timeout')), 2000)
+        );
+
+        await Promise.race([connectPromise, timeoutPromise]);
+        dbConnected = true;
+        console.log('[RealGenerator] Database connected.');
     } catch (err) {
-        console.log('[RealGenerator] Warning: Database disconnected (Running in offline mode if acceptable).');
+        console.log(`[RealGenerator] Warning: ${err.message}. Running in offline mode (JSON fallback).`);
     }
 
     try {
@@ -58,12 +65,15 @@ async function main() {
                 await deleteWebsite(payload);
                 break;
             default:
-                console.log('Unknown action');
+                console.log(`[RealGenerator] Unknown action: ${action}`);
         }
     } catch (err) {
-        console.error('[RealGenerator] Critical Error:', err);
+        console.error('[RealGenerator] Critical Error:', err.message);
     } finally {
-        await client.end();
+        if (dbConnected) {
+            await client.end();
+            console.log('[RealGenerator] Database connection closed.');
+        }
     }
 }
 
@@ -76,159 +86,136 @@ async function createWebsite(data) {
         throw new Error('Missing inputs');
     }
 
-    const workspaceDir = path.join(BASE_CONTAINER_DIR, data.name);
-    const imageName = `website-${data.name.toLowerCase()}`;
-    const containerName = `website-${data.name.toLowerCase()}`;
+    const workspaceId = data.name.toLowerCase();
+    const workspaceDir = path.join(BASE_CONTAINER_DIR, workspaceId);
+    const containerName = `website-${workspaceId}`;
 
-    // 2. Prepare Workspace (Folders & Dockerfile)
+    // 1. Setup Workspace
     if (!fs.existsSync(workspaceDir)) {
-        console.log(`[RealGenerator] Creating directory: ${workspaceDir}`);
         if (!IS_DRY_RUN) fs.mkdirSync(workspaceDir, { recursive: true });
     }
 
-    // Generate Dockerfile content based on template
-    let dockerfileContent = '';
-    if (data.template.toLowerCase() === 'html') {
-        dockerfileContent = `FROM nginx:alpine
-COPY . /usr/share/nginx/html
-EXPOSE 80`;
-    } else if (data.template.toLowerCase() === 'node') {
-        dockerfileContent = `FROM node:18-alpine
-WORKDIR /app
-COPY package*.json ./
-RUN npm install
-COPY . .
-CMD ["npm", "start"]
-EXPOSE ${data.port}`;
-    } else if (data.template.toLowerCase() === 'php') {
-        dockerfileContent = `FROM php:8.2-apache
-COPY . /var/www/html/
-EXPOSE 80`;
-    } else if (data.template.toLowerCase() === 'python') {
-        dockerfileContent = `FROM python:3.9-slim
-WORKDIR /app
-COPY requirements.txt .
-RUN pip install -r requirements.txt
-COPY . .
-CMD ["python", "app.py"]
-EXPOSE ${data.port}`;
+    // 2. Generate Dockerfile & Assets
+    let dockerfile = `FROM nginx:alpine\nCOPY . /usr/share/nginx/html\nEXPOSE 80`;
+    if (data.template === 'php') {
+        dockerfile = `FROM php:8.2-apache\nCOPY . /var/www/html/\nEXPOSE 80`;
     }
 
-    // Write Dockerfile
     if (!IS_DRY_RUN) {
-        fs.writeFileSync(path.join(workspaceDir, 'Dockerfile'), dockerfileContent);
-        // Create a dummy index.html if needed for testing HTML template
-        if (data.template.toLowerCase() === 'html' && !fs.existsSync(path.join(workspaceDir, 'index.html'))) {
-            fs.writeFileSync(path.join(workspaceDir, 'index.html'), `<h1>Hello from ${data.name}</h1><p>Generated by AutoWeb</p>`);
+        fs.writeFileSync(path.join(workspaceDir, 'Dockerfile'), dockerfile);
+        if (!fs.existsSync(path.join(workspaceDir, 'index.html'))) {
+            fs.writeFileSync(path.join(workspaceDir, 'index.html'), `
+<!DOCTYPE html>
+<html>
+<head><title>${data.name}</title></head>
+<body style="font-family: sans-serif; display: flex; align-items: center; justify-content: center; height: 100vh; margin: 0; background: #f8fafc;">
+    <div style="text-align: center; padding: 2rem; background: white; border-radius: 1rem; box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1);">
+        <h1 style="color: #1e293b;">Hello from ${data.name}!</h1>
+        <p style="color: #64748b;">Generated beautifully by Citaks Homelab.</p>
+    </div>
+</body>
+</html>`);
         }
     }
     console.log(`[RealGenerator] Dockerfile and assets prepared.`);
 
-    // 3. Podman Build
-    // Note: In production, we might need --network host or other flags
-    await runCommand(`podman build -t ${imageName} .`, workspaceDir);
-
-    // 4. Podman Run
-    // Map hostPort:containerPort. 
-    // HTML/PHP usually expose 80 inside. Node/Python expose specific ports, need to match.
-    let containerPort = 80;
-    if (['node', 'python'].includes(data.template.toLowerCase())) {
-        // For node/python, we usually expect them to run on the PORT env var or fixed port
-        // Simplification: Assume they listen on the passed data.port inside too, OR we pass -e PORT
-        containerPort = data.port;
-    }
-
-    // Stop existing if any
+    // 3. Build & Run
+    await runCommand(`podman build -t ${containerName} .`, workspaceDir);
     await runCommand(`podman rm -f ${containerName} || true`);
-
-    const runCmd = `podman run -d -p ${data.port}:${containerPort} --name ${containerName} --restart always ${imageName}`;
-    await runCommand(runCmd);
-
+    await runCommand(`podman run -d -p ${data.port}:80 --name ${containerName} --restart always ${containerName}`);
 
     console.log(`[RealGenerator] SUCCESS: Container running on port ${data.port}`);
 
-    // 5. DB Update / Fallback to JSON
-    try {
-        if (!IS_DRY_RUN && client) {
-            console.log('[RealGenerator] Updating database...');
-            const queryText = `
-                INSERT INTO websites (user_id, name, subdomain, template_id, status, port) 
-                VALUES (1, $1, $2, 1, 'running', $3)
-                ON CONFLICT (subdomain) DO UPDATE SET status = 'running', port = $3;
-            `;
-            await client.query(queryText, [data.name, data.name, data.port]);
-            console.log('[RealGenerator] Database updated successfully.');
-        } else {
-            throw new Error('Dry run mode - using JSON fallback');
-        }
-    } catch (e) {
-        console.log('[RealGenerator] Using JSON fallback for persistence...');
+    // 4. Persistence
+    let mockData = [];
+    const dataDir = path.join(__dirname, '../data');
+    if (!fs.existsSync(dataDir)) {
+        if (!IS_DRY_RUN) fs.mkdirSync(dataDir, { recursive: true });
+    }
 
-        // Fallback: Write to JSON file
+    const mockFilePath = path.join(dataDir, 'mock_db.json');
+    if (fs.existsSync(mockFilePath)) {
         try {
-            const mockFilePath = path.join(__dirname, '../data/mock_db.json');
-            let mockData = [];
-            if (fs.existsSync(mockFilePath)) {
-                mockData = JSON.parse(fs.readFileSync(mockFilePath, 'utf-8'));
-            }
-
-            // Check for duplicates
-            const exists = mockData.some(site => site.name.toLowerCase() === data.name.toLowerCase());
-            if (exists) {
-                console.log(`[RealGenerator] Error: Website "${data.name}" already exists!`);
-                return;
-            }
-
-            const newSite = {
-                id: Math.floor(Math.random() * 10000),
-                name: data.name,
-                subdomain: data.name,
-                status: 'running',
-                port: data.port,
-                type: data.template.toUpperCase()
-            };
-
-            mockData.push(newSite);
-            fs.writeFileSync(mockFilePath, JSON.stringify(mockData, null, 2));
-            console.log('[RealGenerator] Fallback: Wrote to mock_db.json');
-
-            // Update Nginx proxy mapping
-            try {
-                updateProxyMap(mockData.map(site => ({
-                    subdomain: site.subdomain.toLowerCase(),
-                    port: site.port
-                })));
-
-                // Reload Nginx (only on Linux)
-                if (process.platform !== 'win32') {
-                    const reloadCmd = getNginxReloadCommand();
-                    await runCommand(reloadCmd);
-                    console.log('[RealGenerator] Nginx configuration reloaded');
-                } else {
-                    console.log(`[RealGenerator] Skipping Nginx reload on Windows. Run on server: ${getNginxReloadCommand()}`);
-                }
-            } catch (nginxErr) {
-                console.warn('[RealGenerator] Nginx update failed (non-critical):', nginxErr.message);
-            }
-        } catch (fileErr) {
-            console.error('[RealGenerator] Fallback Failed:', fileErr.message);
+            mockData = JSON.parse(fs.readFileSync(mockFilePath, 'utf-8'));
+        } catch (e) {
+            mockData = [];
         }
+    }
+
+    const websiteRecord = {
+        id: Math.floor(Math.random() * 100000),
+        name: data.name,
+        subdomain: data.name.toLowerCase(),
+        status: 'running',
+        port: data.port,
+        type: data.template.toUpperCase(),
+        created_at: new Date().toISOString()
+    };
+
+    // Update in DB if connected
+    if (dbConnected) {
+        try {
+            await client.query(
+                `INSERT INTO websites (name, subdomain, status, port, type) 
+                 VALUES ($1, $2, $3, $4, $5)
+                 ON CONFLICT (subdomain) DO UPDATE SET status = 'running', port = $4;`,
+                [websiteRecord.name, websiteRecord.subdomain, websiteRecord.status, websiteRecord.port, websiteRecord.type]
+            );
+            console.log('[RealGenerator] Database updated.');
+        } catch (dbErr) {
+            console.error('[RealGenerator] DB Insert failed:', dbErr.message);
+        }
+    }
+
+    // Always update JSON for local fallback and dashboard visibility
+    const existingIdx = mockData.findIndex(s => s.subdomain === websiteRecord.subdomain);
+    if (existingIdx > -1) {
+        mockData[existingIdx] = websiteRecord;
+    } else {
+        mockData.push(websiteRecord);
+    }
+
+    if (!IS_DRY_RUN) {
+        fs.writeFileSync(mockFilePath, JSON.stringify(mockData, null, 2));
+        console.log('[RealGenerator] Local data persistence updated.');
+    }
+
+    // 5. Update Nginx Proxy Map
+    try {
+        updateProxyMap(mockData.map(site => ({
+            subdomain: site.subdomain.toLowerCase(),
+            port: site.port
+        })));
+
+        if (!IS_DRY_RUN && process.platform !== 'win32') {
+            await runCommand(getNginxReloadCommand());
+            console.log('[RealGenerator] Nginx reloaded successfully.');
+        } else if (IS_DRY_RUN) {
+            console.log(`[RealGenerator] Skipping Nginx reload in DRY RUN. Command: ${getNginxReloadCommand()}`);
+        } else { // On Windows
+            console.log(`[RealGenerator] Skipping Nginx reload on Windows. Run on server: ${getNginxReloadCommand()}`);
+        }
+    } catch (err) {
+        console.warn('[RealGenerator] Nginx update failed (non-critical):', err.message);
     }
 }
 
 async function startWebsite(data) {
     const containerName = `website-${data.name.toLowerCase()}`;
     await runCommand(`podman start ${containerName}`);
+    console.log(`[RealGenerator] Started container: ${containerName}`);
 }
 
 async function stopWebsite(data) {
     const containerName = `website-${data.name.toLowerCase()}`;
     await runCommand(`podman stop ${containerName}`);
+    console.log(`[RealGenerator] Stopped container: ${containerName}`);
 }
 
 async function deleteWebsite(data) {
     const containerName = `website-${data.name.toLowerCase()}`;
     await runCommand(`podman rm -f ${containerName}`);
+    console.log(`[RealGenerator] Deleted container: ${containerName}`);
     // Optional: podman rmi ...
 }
 

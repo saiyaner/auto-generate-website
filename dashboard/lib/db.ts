@@ -1,8 +1,10 @@
 import { Pool } from 'pg';
 
-const pool = new Pool({
-    connectionString: process.env.DATABASE_URL || 'postgres://postgres:Citaks@localhost:5432/homelab_auto_gen',
-});
+const connectionString = process.env.DATABASE_URL && !process.env.DATABASE_URL.includes('dummy')
+    ? process.env.DATABASE_URL
+    : 'postgres://postgres:Citaks@localhost:5432/homelab_auto_gen';
+
+const pool = new Pool({ connectionString });
 
 import fs from 'fs';
 import path from 'path';

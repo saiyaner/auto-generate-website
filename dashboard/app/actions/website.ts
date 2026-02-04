@@ -9,55 +9,68 @@ import path from 'path'
 
 const execPromise = util.promisify(exec)
 
+import fs from 'fs/promises'
+import os from 'os'
+
 export async function createWebsiteAction(formData: FormData) {
     const name = formData.get('name') as string
     const template = formData.get('template') as string
     const sourceType = formData.get('sourceType') as string
-    const createDb = formData.get('createDb') === 'on'
 
-    // Using Mock Generator Script
-    // In real implementation, this would handle Git/Zip inputs too
+    let zipPath = ''
+    const repoUrl = formData.get('repoUrl') as string
 
-    // Assign a random port for now (mock logic)
+    // Handle ZIP Upload
+    if (sourceType === 'zip') {
+        const file = formData.get('file') as File
+        if (file) {
+            const bytes = await file.arrayBuffer()
+            const buffer = Buffer.from(bytes)
+            const tempDir = os.tmpdir()
+            zipPath = path.join(tempDir, `${Date.now()}-${file.name}`)
+            await fs.writeFile(zipPath, buffer)
+        }
+    }
+
+    // Assign a random port
     const port = Math.floor(Math.random() * (20000 - 10000) + 10000)
 
-    // Escape for Windows Command Line:
-    // 1. Double quotes in JSON must be escaped as \"
-    // 2. The whole JSON string must be wrapped in double quotes
-    // 3. Inner quotes are escaped again if needed, but for simple JSON, strict \" usually works in Node's exec
-    // However, exec is tricky. Let's try recursive escaping.
-
-    // Simplest reliable way for Windows+Node exec with JSON:
-    // Escape all double quotes as \"
-    const escapedPayload = JSON.stringify({
+    const payloadObj: any = {
         name,
-        template: template || 'html', // Default to html if missing
-        port
-    }).replace(/"/g, '\\"');
+        template: template || 'auto', // Default to auto-detect if missing
+        port,
+        sourceType
+    }
 
+    if (sourceType === 'git') payloadObj.repoUrl = repoUrl
+    if (sourceType === 'zip') payloadObj.zipPath = zipPath
+
+    const escapedPayload = JSON.stringify(payloadObj).replace(/"/g, '\\"');
 
     try {
-        // Execute the script
-        const isProduction = process.env.GENERATOR_MODE === 'production';
+        const isProduction = process.env.GENERATOR_MODE === 'production' || process.platform !== 'win32';
         const scriptName = isProduction ? 'generator.js' : 'mock_generator.js';
         const scriptPath = path.resolve('..', 'scripts', scriptName);
 
-        // Wrap payload in double quotes
         const command = `node "${scriptPath}" create "${escapedPayload}"`
         console.log('Running command:', command)
 
-        const { stdout, stderr } = await execPromise(command)
+        const { stdout, stderr } = await execPromise(command, {
+            env: {
+                ...process.env,
+                DATABASE_URL: 'postgres://postgres:Citaks@localhost:5432/homelab_auto_gen'
+            }
+        })
+
         console.log('STDOUT:', stdout)
         if (stderr) console.error('STDERR:', stderr)
 
-        // Check for specific generator errors in STDOUT (since the script logs them there)
-        if (stdout.includes('[Generator] Error:')) {
-            const errorMatch = stdout.match(/\[Generator\] Error: (.*)/);
-            const errorMessage = errorMatch ? errorMatch[1] : 'Unknown Generator Error';
-            return { success: false, message: errorMessage };
+        if (stdout.includes('Error:')) {
+            return { success: false, message: 'Generation failed. Check logs.' };
         }
 
-        return { success: true, message: 'Website created successfully!' }
+        revalidatePath('/websites')
+        return { success: true, message: 'Website creation started!' }
 
     } catch (error: any) {
         console.error('Failed to create website:', error)

@@ -1,7 +1,8 @@
 'use client'
 
-import { Button, Input, Card, CardHeader, CardTitle, CardContent } from '@/components/ui'
-import { useState } from 'react'
+import { Button, Input, Card, CardHeader, CardTitle, CardContent, Modal } from '@/components/ui'
+import { useState, useEffect } from 'react'
+import { Terminal, Loader2, CheckCircle2, AlertCircle } from 'lucide-react'
 
 import { createWebsiteAction } from '@/app/actions/website'
 import { useRouter } from 'next/navigation'
@@ -10,7 +11,17 @@ export default function NewWebsitePage() {
     const [sourceType, setSourceType] = useState<'template' | 'git' | 'zip'>('template')
     const [isLoading, setIsLoading] = useState(false)
     const [status, setStatus] = useState<{ type: 'success' | 'error', message: string } | null>(null)
-    const router = useRouter() // Import from next/navigation
+    const [logs, setLogs] = useState<string>('')
+    const [showLogModal, setShowLogModal] = useState(false)
+    const [creationFinished, setCreationFinished] = useState(false)
+    const router = useRouter()
+
+    function slugify(text: string) {
+        return text.toString().toLowerCase().trim()
+            .replace(/\s+/g, '-')
+            .replace(/[^\w\-]+/g, '')
+            .replace(/\-\-+/g, '-')
+    }
 
     async function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
         e.preventDefault()
@@ -19,21 +30,41 @@ export default function NewWebsitePage() {
 
         const formData = new FormData(e.currentTarget)
         formData.append('sourceType', sourceType)
+        const name = formData.get('name') as string
+        const subdomain = slugify(name)
+
+        setShowLogModal(true)
+        setLogs('Initializing deployment...')
+        setCreationFinished(false)
+
+        // Start log polling
+        const pollInterval = setInterval(async () => {
+            try {
+                const res = await fetch(`/api/websites/${subdomain}/creation-logs`)
+                const data = await res.json()
+                if (data.logs) setLogs(data.logs)
+            } catch (err) {
+                console.error('Polling error:', err)
+            }
+        }, 1500)
 
         try {
             const result = await createWebsiteAction(formData)
+            clearInterval(pollInterval)
+            setCreationFinished(true)
 
             if (result.success) {
                 setStatus({ type: 'success', message: `${result.message} Redirecting...` })
-                // Redirect after short delay
                 setTimeout(() => {
                     router.push('/websites')
-                    router.refresh() // Ensure list updates
-                }, 1500)
+                    router.refresh()
+                }, 3000)
             } else {
                 setStatus({ type: 'error', message: result.message || 'Failed to create website' })
             }
         } catch (err) {
+            clearInterval(pollInterval)
+            setCreationFinished(true)
             console.error(err)
             setStatus({ type: 'error', message: 'An unexpected error occurred.' })
         } finally {
@@ -171,6 +202,49 @@ export default function NewWebsitePage() {
                     </form>
                 </CardContent>
             </Card>
+
+            <Modal isOpen={showLogModal} onClose={() => !isLoading && setShowLogModal(false)}>
+                <div className="flex flex-col h-full overflow-hidden">
+                    <CardHeader className="border-b px-6 py-4 flex flex-row items-center justify-between">
+                        <div className="flex items-center gap-3">
+                            <Terminal className="h-5 w-5 text-slate-500" />
+                            <CardTitle className="text-lg">Deployment Progress</CardTitle>
+                        </div>
+                        {!creationFinished && (
+                            <Loader2 className="h-4 w-4 animate-spin text-blue-500" />
+                        )}
+                    </CardHeader>
+
+                    <div className="flex-1 overflow-auto bg-slate-950 text-slate-50 p-6 font-mono text-xs whitespace-pre-wrap min-h-[300px] max-h-[500px]">
+                        {logs}
+                    </div>
+
+                    <div className="p-4 border-t flex items-center justify-between bg-slate-50">
+                        <div className="flex items-center gap-2">
+                            {creationFinished ? (
+                                status?.type === 'success' ? (
+                                    <div className="flex items-center text-green-600 text-sm font-medium">
+                                        <CheckCircle2 className="h-4 w-4 mr-1" /> Success
+                                    </div>
+                                ) : (
+                                    <div className="flex items-center text-red-600 text-sm font-medium">
+                                        <AlertCircle className="h-4 w-4 mr-1" /> Failed
+                                    </div>
+                                )
+                            ) : (
+                                <div className="text-slate-500 text-sm animate-pulse">Processing...</div>
+                            )}
+                        </div>
+                        <Button
+                            variant={creationFinished ? 'default' : 'outline'}
+                            onClick={() => setShowLogModal(false)}
+                            disabled={!creationFinished}
+                        >
+                            {status?.type === 'success' ? 'Go to Dashboard' : 'Close'}
+                        </Button>
+                    </div>
+                </div>
+            </Modal>
         </div>
     )
 }

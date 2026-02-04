@@ -6,6 +6,10 @@ const util = require('util');
 const execPromise = util.promisify(exec);
 const { updateProxyMap, getNginxReloadCommand } = require('./nginx-updater');
 
+// Ensure log directory exists
+const LOG_DIR = path.join(__dirname, '..', 'data', 'logs');
+if (!fs.existsSync(LOG_DIR)) fs.mkdirSync(LOG_DIR, { recursive: true });
+
 // Configuration
 const IS_DRY_RUN = process.env.DRY_RUN === 'true' || process.platform === 'win32';
 const BASE_CONTAINER_DIR = process.env.CONTAINER_DIR || path.join(__dirname, '..', 'containers');
@@ -16,6 +20,21 @@ const action = process.argv[2];
 const payloadStr = process.argv[3];
 const payload = payloadStr ? JSON.parse(payloadStr) : {};
 
+const client = new Client({ connectionString: DATABASE_URL });
+let dbConnected = false;
+
+// Log redirection helper
+const subdomainForLog = payload.name ? slugify(payload.name) : 'unknown';
+const logFile = path.join(LOG_DIR, `${subdomainForLog}.log`);
+const logStream = fs.createWriteStream(logFile, { flags: 'a' });
+
+function log(msg) {
+    const time = new Date().toISOString();
+    const formatted = `[${time}] ${msg}\n`;
+    process.stdout.write(formatted);
+    logStream.write(formatted);
+}
+
 function slugify(text) {
     return text.toString().toLowerCase()
         .replace(/\s+/g, '-')           // Replace spaces with -
@@ -25,18 +44,17 @@ function slugify(text) {
         .replace(/-+$/, '');            // Trim - from end of text
 }
 
-const client = new Client({ connectionString: DATABASE_URL });
-let dbConnected = false;
-
 async function runCommand(command, cwd = process.cwd()) {
-    console.log(`[CMD] ${command}`);
+    log(`[CMD] ${command}`);
     if (IS_DRY_RUN) return { stdout: 'Mock Success', stderr: '' };
 
     try {
         const { stdout, stderr } = await execPromise(command, { cwd });
+        if (stdout) log(`[STDOUT] ${stdout.trim()}`);
+        if (stderr) log(`[STDERR] ${stderr.trim()}`);
         return { stdout, stderr };
     } catch (error) {
-        console.error(`[CMD Failed] ${command}`, error.message);
+        log(`[CMD Failed] ${command}: ${error.message}`);
         throw error;
     }
 }
@@ -104,36 +122,62 @@ async function createWebsite(data) {
         if (!IS_DRY_RUN) fs.mkdirSync(workspaceDir, { recursive: true });
     }
 
-    // 2. Generate Dockerfile & Assets
-    let dockerfile = `FROM nginx:alpine\nCOPY . /usr/share/nginx/html\nEXPOSE 80`;
-    if (data.template === 'php') {
+    // 1. Setup Workspace
+    if (!fs.existsSync(workspaceDir)) {
+        if (!IS_DRY_RUN) fs.mkdirSync(workspaceDir, { recursive: true });
+    }
+
+    // 2. Handle Source (Git / ZIP)
+    if (data.sourceType === 'git' && data.repoUrl) {
+        log(`[RealGenerator] Cloning repository: ${data.repoUrl}`);
+        await runCommand(`git clone ${data.repoUrl} .`, workspaceDir);
+    } else if (data.sourceType === 'zip' && data.zipPath) {
+        log(`[RealGenerator] Extracting ZIP: ${data.zipPath}`);
+        await runCommand(`unzip -o "${data.zipPath}" -d .`, workspaceDir);
+        // Clean up temp zip
+        if (!IS_DRY_RUN) await fs.promises.unlink(data.zipPath).catch(() => { });
+    }
+
+    // 3. Auto-Detect Stack
+    let stack = data.template;
+    if (stack === 'auto' || !stack) {
+        log('[RealGenerator] Auto-detecting technology...');
+        if (fs.existsSync(path.join(workspaceDir, 'package.json'))) {
+            stack = 'node';
+        } else if (fs.existsSync(path.join(workspaceDir, 'composer.json')) || fs.readdirSync(workspaceDir).some(f => f.endsWith('.php'))) {
+            stack = 'php';
+        } else if (fs.existsSync(path.join(workspaceDir, 'requirements.txt'))) {
+            stack = 'python';
+        } else {
+            stack = 'html';
+        }
+        log(`[RealGenerator] Detected stack: ${stack.toUpperCase()}`);
+    }
+
+    // 4. Generate Dockerfile
+    let dockerfile = '';
+    if (stack === 'php') {
         dockerfile = `FROM php:8.2-apache\nCOPY . /var/www/html/\nEXPOSE 80`;
+    } else if (stack === 'node') {
+        dockerfile = `FROM node:20-alpine\nWORKDIR /app\nCOPY package*.json ./\nRUN npm install\nCOPY . .\nEXPOSE 3000\nCMD ["npm", "start"]`;
+    } else if (stack === 'python') {
+        dockerfile = `FROM python:3.11-slim\nWORKDIR /app\nCOPY requirements.txt .\nRUN pip install -r requirements.txt\nCOPY . .\nEXPOSE 5000\nCMD ["python", "app.py"]`;
+    } else {
+        dockerfile = `FROM nginx:alpine\nCOPY . /usr/share/nginx/html\nEXPOSE 80`;
     }
 
     if (!IS_DRY_RUN) {
         fs.writeFileSync(path.join(workspaceDir, 'Dockerfile'), dockerfile);
-        if (!fs.existsSync(path.join(workspaceDir, 'index.html'))) {
-            fs.writeFileSync(path.join(workspaceDir, 'index.html'), `
-<!DOCTYPE html>
-<html>
-<head><title>${data.name}</title></head>
-<body style="font-family: sans-serif; display: flex; align-items: center; justify-content: center; height: 100vh; margin: 0; background: #f8fafc;">
-    <div style="text-align: center; padding: 2rem; background: white; border-radius: 1rem; box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1);">
-        <h1 style="color: #1e293b;">Hello from ${data.name}!</h1>
-        <p style="color: #64748b;">Generated beautifully by Citaks Homelab.</p>
-    </div>
-</body>
-</html>`);
-        }
     }
-    console.log(`[RealGenerator] Dockerfile and assets prepared.`);
+    log(`[RealGenerator] Generated Dockerfile for ${stack.toUpperCase()}`);
 
-    // 3. Build & Run
+    // 5. Build & Run
+    const portInContainer = stack === 'node' ? 3000 : (stack === 'python' ? 5000 : 80);
     await runCommand(`podman build -t ${containerName} .`, workspaceDir);
     await runCommand(`podman rm -f ${containerName} || true`);
-    await runCommand(`podman run -d -p ${data.port}:80 --name ${containerName} --restart always ${containerName}`);
+    await runCommand(`podman run -d -p ${data.port}:${portInContainer} --name ${containerName} --restart always ${containerName}`);
 
-    console.log(`[RealGenerator] SUCCESS: Container running on port ${data.port}`);
+    log(`[RealGenerator] SUCCESS: Container running on port ${data.port}`);
 
     // 4. Persistence
     let mockData = [];

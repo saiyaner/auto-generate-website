@@ -16,6 +16,15 @@ const action = process.argv[2];
 const payloadStr = process.argv[3];
 const payload = payloadStr ? JSON.parse(payloadStr) : {};
 
+function slugify(text) {
+    return text.toString().toLowerCase()
+        .replace(/\s+/g, '-')           // Replace spaces with -
+        .replace(/[^\w\-]+/g, '')       // Remove all non-word chars
+        .replace(/\-\-+/g, '-')         // Replace multiple - with single -
+        .replace(/^-+/, '')             // Trim - from start of text
+        .replace(/-+$/, '');            // Trim - from end of text
+}
+
 const client = new Client({ connectionString: DATABASE_URL });
 let dbConnected = false;
 
@@ -86,7 +95,7 @@ async function createWebsite(data) {
         throw new Error('Missing inputs');
     }
 
-    const workspaceId = data.name.toLowerCase();
+    const workspaceId = slugify(data.name);
     const workspaceDir = path.join(BASE_CONTAINER_DIR, workspaceId);
     const containerName = `website-${workspaceId}`;
 
@@ -201,36 +210,39 @@ async function createWebsite(data) {
 }
 
 async function startWebsite(data) {
-    const containerName = `website-${data.name.toLowerCase()}`;
+    const subdomain = slugify(data.name);
+    const containerName = `website-${subdomain}`;
     await runCommand(`podman start ${containerName}`);
     console.log(`[RealGenerator] Started container: ${containerName}`);
 
     if (dbConnected) {
-        await client.query("UPDATE websites SET status = 'running' WHERE subdomain = $1", [data.name.toLowerCase()]);
+        await client.query("UPDATE websites SET status = 'running' WHERE subdomain = $1", [subdomain]);
         console.log('[RealGenerator] Database updated (status: running).');
     }
-    updateMockStatus(data.name.toLowerCase(), 'running');
+    updateMockStatus(subdomain, 'running');
 }
 
 async function stopWebsite(data) {
-    const containerName = `website-${data.name.toLowerCase()}`;
+    const subdomain = slugify(data.name);
+    const containerName = `website-${subdomain}`;
     await runCommand(`podman stop ${containerName}`);
     console.log(`[RealGenerator] Stopped container: ${containerName}`);
 
     if (dbConnected) {
-        await client.query("UPDATE websites SET status = 'stopped' WHERE subdomain = $1", [data.name.toLowerCase()]);
+        await client.query("UPDATE websites SET status = 'stopped' WHERE subdomain = $1", [subdomain]);
         console.log('[RealGenerator] Database updated (status: stopped).');
     }
-    updateMockStatus(data.name.toLowerCase(), 'stopped');
+    updateMockStatus(subdomain, 'stopped');
 }
 
 async function deleteWebsite(data) {
-    const workspaceId = data.name.toLowerCase();
+    const workspaceId = slugify(data.name);
     const workspaceDir = path.join(BASE_CONTAINER_DIR, workspaceId);
     const containerName = `website-${workspaceId}`;
 
-    await runCommand(`podman rm -f ${containerName}`);
-    console.log(`[RealGenerator] Deleted container: ${containerName}`);
+    await runCommand(`podman rm -f ${containerName} || true`);
+    await runCommand(`podman rmi ${containerName} || true`);
+    console.log(`[RealGenerator] Deleted container and image: ${containerName}`);
 
     // Clean up volume/directory if not on windows
     if (!IS_DRY_RUN && process.platform !== 'win32') {

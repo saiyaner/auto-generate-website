@@ -86,7 +86,12 @@ async function executeGeneratorAction(name: string, action: 'start' | 'stop' | '
         const command = `node "${scriptPath}" ${action} "${escapedPayload}"`;
         console.log(`Running ${action} command:`, command);
 
-        const { stdout, stderr } = await execPromise(command);
+        const { stdout, stderr } = await execPromise(command, {
+            env: {
+                ...process.env,
+                DATABASE_URL: 'postgres://postgres:Citaks@localhost:5432/homelab_auto_gen'
+            }
+        });
         console.log('STDOUT:', stdout);
         if (stderr) console.error('STDERR:', stderr);
 

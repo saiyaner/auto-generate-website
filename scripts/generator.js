@@ -204,19 +204,88 @@ async function startWebsite(data) {
     const containerName = `website-${data.name.toLowerCase()}`;
     await runCommand(`podman start ${containerName}`);
     console.log(`[RealGenerator] Started container: ${containerName}`);
+
+    if (dbConnected) {
+        await client.query("UPDATE websites SET status = 'running' WHERE subdomain = $1", [data.name.toLowerCase()]);
+        console.log('[RealGenerator] Database updated (status: running).');
+    }
+    updateMockStatus(data.name.toLowerCase(), 'running');
 }
 
 async function stopWebsite(data) {
     const containerName = `website-${data.name.toLowerCase()}`;
     await runCommand(`podman stop ${containerName}`);
     console.log(`[RealGenerator] Stopped container: ${containerName}`);
+
+    if (dbConnected) {
+        await client.query("UPDATE websites SET status = 'stopped' WHERE subdomain = $1", [data.name.toLowerCase()]);
+        console.log('[RealGenerator] Database updated (status: stopped).');
+    }
+    updateMockStatus(data.name.toLowerCase(), 'stopped');
 }
 
 async function deleteWebsite(data) {
-    const containerName = `website-${data.name.toLowerCase()}`;
+    const workspaceId = data.name.toLowerCase();
+    const workspaceDir = path.join(BASE_CONTAINER_DIR, workspaceId);
+    const containerName = `website-${workspaceId}`;
+
     await runCommand(`podman rm -f ${containerName}`);
     console.log(`[RealGenerator] Deleted container: ${containerName}`);
-    // Optional: podman rmi ...
+
+    // Clean up volume/directory if not on windows
+    if (!IS_DRY_RUN && process.platform !== 'win32') {
+        await runCommand(`rm -rf ${workspaceDir}`);
+        console.log(`[RealGenerator] Deleted workspace directory: ${workspaceDir}`);
+    }
+
+    if (dbConnected) {
+        await client.query("DELETE FROM websites WHERE subdomain = $1", [workspaceId]);
+        console.log('[RealGenerator] Database record deleted.');
+    }
+
+    // Update JSON
+    const mockFilePath = path.join(__dirname, '../data/mock_db.json');
+    if (fs.existsSync(mockFilePath)) {
+        let mockData = JSON.parse(fs.readFileSync(mockFilePath, 'utf-8'));
+        mockData = mockData.filter(s => s.subdomain !== workspaceId);
+        fs.writeFileSync(mockFilePath, JSON.stringify(mockData, null, 2));
+        console.log('[RealGenerator] Local data persistence updated (record removed).');
+    }
+
+    // Update Nginx Proxy Map
+    try {
+        const mockFilePath = path.join(__dirname, '../data/mock_db.json');
+        if (fs.existsSync(mockFilePath)) {
+            const mockData = JSON.parse(fs.readFileSync(mockFilePath, 'utf-8'));
+            updateProxyMap(mockData.map(site => ({
+                subdomain: site.subdomain.toLowerCase(),
+                port: site.port
+            })));
+
+            if (!IS_DRY_RUN && process.platform !== 'win32') {
+                await runCommand(getNginxReloadCommand());
+            }
+        }
+    } catch (err) {
+        console.warn('[RealGenerator] Nginx update failed during delete:', err.message);
+    }
+}
+
+function updateMockStatus(subdomain, status) {
+    const mockFilePath = path.join(__dirname, '../data/mock_db.json');
+    if (fs.existsSync(mockFilePath)) {
+        try {
+            const mockData = JSON.parse(fs.readFileSync(mockFilePath, 'utf-8'));
+            const site = mockData.find(s => s.subdomain === subdomain);
+            if (site) {
+                site.status = status;
+                fs.writeFileSync(mockFilePath, JSON.stringify(mockData, null, 2));
+                console.log(`[RealGenerator] Local mock_db updated status to: ${status}`);
+            }
+        } catch (e) {
+            console.error('Error updating mock status:', e.message);
+        }
+    }
 }
 
 main().catch(console.error);

@@ -3,15 +3,15 @@ import { Plus } from 'lucide-react'
 import Link from 'next/link'
 
 import { query } from '@/lib/db'
+import { WebsiteActions } from '@/components/WebsiteActions'
 
 export const dynamic = 'force-dynamic'
 
 async function getWebsites() {
     const result = await query(`
-    SELECT w.id, w.name, w.subdomain, w.status, w.port, t.name as type 
-    FROM websites w
-    LEFT JOIN templates t ON w.template_id = t.id
-    ORDER BY w.created_at DESC
+    SELECT id, name, subdomain, status, port, type 
+    FROM websites 
+    ORDER BY created_at DESC
   `)
     return result.rows
 }
@@ -31,7 +31,7 @@ export default async function WebsitesPage() {
             </div>
 
             <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
-                {websites.map((site) => (
+                {websites.map((site: any) => (
                     <Card key={site.id} className="hover:shadow-md transition-shadow">
                         <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
                             <CardTitle className="text-base font-medium">{site.name}</CardTitle>
@@ -57,9 +57,8 @@ export default async function WebsitesPage() {
                                     <span className="font-mono">{site.port}</span>
                                 </div>
                             </div>
-                            <div className="mt-4 flex space-x-2">
-                                <Button variant="outline" size="sm" className="w-full">Manage</Button>
-                                <Button variant="outline" size="sm" className="w-full">Logs</Button>
+                            <div className="mt-4">
+                                <WebsiteActions site={site} />
                             </div>
                         </CardContent>
                     </Card>

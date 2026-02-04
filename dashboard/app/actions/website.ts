@@ -63,3 +63,39 @@ export async function createWebsiteAction(formData: FormData) {
         return { success: false, message: error.message || 'Failed to execute creation script' }
     }
 }
+
+export async function startWebsiteAction(name: string) {
+    return executeGeneratorAction(name, 'start');
+}
+
+export async function stopWebsiteAction(name: string) {
+    return executeGeneratorAction(name, 'stop');
+}
+
+export async function deleteWebsiteAction(name: string) {
+    return executeGeneratorAction(name, 'delete');
+}
+
+async function executeGeneratorAction(name: string, action: 'start' | 'stop' | 'delete') {
+    try {
+        const escapedPayload = JSON.stringify({ name }).replace(/"/g, '\\"');
+        const isProduction = process.env.GENERATOR_MODE === 'production';
+        const scriptName = isProduction ? 'generator.js' : 'mock_generator.js';
+        const scriptPath = path.resolve('..', 'scripts', scriptName);
+
+        const command = `node "${scriptPath}" ${action} "${escapedPayload}"`;
+        console.log(`Running ${action} command:`, command);
+
+        const { stdout, stderr } = await execPromise(command);
+        if (stderr) console.error('STDERR:', stderr);
+
+        if (stdout.includes('[Generator] Error:')) {
+            return { success: false, message: 'Action failed on server.' };
+        }
+
+        return { success: true, message: `Website ${action}ed successfully!` };
+    } catch (error: any) {
+        console.error(`Failed to ${action} website:`, error);
+        return { success: false, message: error.message || `Failed to execute ${action} script` };
+    }
+}

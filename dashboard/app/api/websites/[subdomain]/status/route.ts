@@ -6,9 +6,9 @@ const execPromise = util.promisify(exec)
 
 export async function GET(
     request: NextRequest,
-    { params }: { params: { subdomain: string } }
+    { params }: { params: Promise<{ subdomain: string }> }
 ) {
-    const subdomain = params.subdomain
+    const { subdomain } = await params
 
     if (!/^[a-z0-9-]+$/.test(subdomain)) {
         return NextResponse.json({ error: 'Invalid subdomain format' }, { status: 400 })

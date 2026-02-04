@@ -4,7 +4,7 @@ const { Client } = require('pg');
 
 // Database Config
 const client = new Client({
-    connectionString: 'postgres://postgres:password123@localhost:5432/homelab_auto_gen'
+    connectionString: 'postgres://postgres:Citaks@localhost:5432/homelab_auto_gen'
 });
 
 // Mock Generator Script

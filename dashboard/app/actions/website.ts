@@ -79,7 +79,7 @@ export async function deleteWebsiteAction(name: string) {
 async function executeGeneratorAction(name: string, action: 'start' | 'stop' | 'delete') {
     try {
         const escapedPayload = JSON.stringify({ name }).replace(/"/g, '\\"');
-        const isProduction = process.env.GENERATOR_MODE === 'production';
+        const isProduction = process.env.GENERATOR_MODE === 'production' || process.platform !== 'win32';
         const scriptName = isProduction ? 'generator.js' : 'mock_generator.js';
         const scriptPath = path.resolve('..', 'scripts', scriptName);
 
@@ -87,10 +87,11 @@ async function executeGeneratorAction(name: string, action: 'start' | 'stop' | '
         console.log(`Running ${action} command:`, command);
 
         const { stdout, stderr } = await execPromise(command);
+        console.log('STDOUT:', stdout);
         if (stderr) console.error('STDERR:', stderr);
 
-        if (stdout.includes('[Generator] Error:')) {
-            return { success: false, message: 'Action failed on server.' };
+        if (stdout.includes('Error:') || stdout.includes('failed')) {
+            return { success: false, message: 'Action failed on server. check logs.' };
         }
 
         return { success: true, message: `Website ${action}ed successfully!` };

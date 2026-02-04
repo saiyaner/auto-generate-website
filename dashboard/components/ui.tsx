@@ -77,4 +77,23 @@ const CardContent = React.forwardRef<HTMLDivElement, React.HTMLAttributes<HTMLDi
 ))
 CardContent.displayName = "CardContent"
 
-export { Button, Input, Card, CardHeader, CardTitle, CardContent }
+
+// Modal Component (Simple Dialog)
+const Modal = ({ isOpen, onClose, children }: { isOpen: boolean, onClose: () => void, children: React.ReactNode }) => {
+    if (!isOpen) return null;
+    return (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50">
+            <div className="relative w-full max-w-3xl bg-white rounded-lg shadow-xl flex flex-col max-h-[90vh]">
+                <button
+                    onClick={onClose}
+                    className="absolute top-4 right-4 text-slate-500 hover:text-slate-900"
+                >
+                    ✕
+                </button>
+                {children}
+            </div>
+        </div>
+    );
+};
+
+export { Button, Input, Card, CardHeader, CardTitle, CardContent, Modal }

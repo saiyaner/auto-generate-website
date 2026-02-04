@@ -5,6 +5,7 @@ import { Button } from '@/components/ui'
 import { startWebsiteAction, stopWebsiteAction, deleteWebsiteAction } from '@/app/actions/website'
 import { Play, Square, Trash2, Loader2, ExternalLink } from 'lucide-react'
 import { useRouter } from 'next/navigation'
+import { LogViewer } from './LogViewer'
 
 interface WebsiteActionsProps {
     site: {
@@ -86,14 +87,17 @@ export function WebsiteActions({ site }: WebsiteActionsProps) {
                 </Button>
             </div>
 
-            <a
-                href={`https://${site.subdomain}.citaks.my.id`}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-slate-950 disabled:pointer-events-none disabled:opacity-50 border border-slate-200 bg-white shadow-sm hover:bg-slate-100 hover:text-slate-900 h-9 px-3 w-full"
-            >
-                <ExternalLink className="mr-2 h-4 w-4" /> Open Website
-            </a>
+            <div className="flex space-x-2">
+                <LogViewer subdomain={site.subdomain} websiteName={site.name} />
+                <a
+                    href={`https://${site.subdomain}.citaks.my.id`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-slate-950 disabled:pointer-events-none disabled:opacity-50 border border-slate-200 bg-white shadow-sm hover:bg-slate-100 hover:text-slate-900 h-9 px-3 flex-1"
+                >
+                    <ExternalLink className="mr-2 h-4 w-4" /> Open
+                </a>
+            </div>
         </div>
     )
 }

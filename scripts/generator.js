@@ -9,7 +9,7 @@ const { updateProxyMap, getNginxReloadCommand } = require('./nginx-updater');
 // Configuration
 const IS_DRY_RUN = process.env.DRY_RUN === 'true' || process.platform === 'win32';
 const BASE_CONTAINER_DIR = process.env.CONTAINER_DIR || path.join(__dirname, '..', 'containers');
-const DATABASE_URL = process.env.DATABASE_URL || 'postgres://postgres:password123@localhost:5432/homelab_auto_gen';
+const DATABASE_URL = process.env.DATABASE_URL || 'postgres://postgres:Citaks@localhost:5432/homelab_auto_gen';
 
 // Usage: node scripts/generator.js <action> <payload>
 const action = process.argv[2];

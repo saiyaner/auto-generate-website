@@ -16,7 +16,7 @@ export async function query(text: string, params?: any[]) {
         console.log('executed query', { text, duration, rows: res.rowCount });
         return res;
     } catch (error: any) {
-        // Log as info, not warning, to avoid alarming the user during dev
+        console.error('Database Connection Error:', error.message);
         console.log('Running in Offline Mode (Mock Data)');
 
         // In production on the server, we use the absolute path to ensure consistency

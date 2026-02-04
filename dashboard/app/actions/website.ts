@@ -1,6 +1,7 @@
 'use server'
 
 import { redirect } from 'next/navigation'
+import { revalidatePath } from 'next/cache'
 import { query } from '@/lib/db'
 import { exec } from 'child_process'
 import util from 'util'
@@ -99,6 +100,7 @@ async function executeGeneratorAction(name: string, action: 'start' | 'stop' | '
             return { success: false, message: 'Action failed on server. check logs.' };
         }
 
+        revalidatePath('/websites');
         return { success: true, message: `Website ${action}ed successfully!` };
     } catch (error: any) {
         console.error(`Failed to ${action} website:`, error);

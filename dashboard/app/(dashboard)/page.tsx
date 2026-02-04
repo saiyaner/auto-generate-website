@@ -107,7 +107,7 @@ export default async function DashboardPage() {
                     <CardContent>
                         <div className="space-y-4">
                             {recentWebsites.rows.length > 0 ? (
-                                recentWebsites.rows.map((site) => (
+                                recentWebsites.rows.map((site: any) => (
                                     <div key={site.id} className="flex items-center">
                                         <div className="ml-4 space-y-1">
                                             <p className="text-sm font-medium leading-none">Website '{site.name}' created</p>
